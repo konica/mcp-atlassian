@@ -8,7 +8,7 @@ All other MCP protocol messages (initialize, notifications, tools/list, etc.)
 are forwarded transparently without modification.
 
 Usage:
-    uvicorn mcp_proxy.main:app --host 0.0.0.0 --port 8080
+    uvicorn mcp_proxy.main:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
@@ -144,6 +144,29 @@ def _extract_user_identity(request: Request) -> str | None:
         token = auth[6:].strip()
         return f"pat:...{token[-8:]}" if len(token) > 8 else "pat:<short>"
     return "unknown-auth-type"
+
+
+# ---------------------------------------------------------------------------
+# OAuth discovery — short-circuit: this proxy is not an OAuth server
+# ---------------------------------------------------------------------------
+
+
+@app.api_route(
+    "/.well-known/{path:path}",
+    methods=["GET"],
+    include_in_schema=False,
+)
+async def well_known_not_found(path: str) -> JSONResponse:
+    """Return 404 for OAuth discovery endpoints.
+
+    The MCP SDK probes these after receiving a non-2xx response. Since this
+    proxy is not an OAuth server, respond immediately rather than forwarding
+    to the upstream (which would also 404).
+    """
+    return JSONResponse(
+        {"error": "not_found", "detail": f"/.well-known/{path} is not available on this proxy"},
+        status_code=404,
+    )
 
 
 # ---------------------------------------------------------------------------

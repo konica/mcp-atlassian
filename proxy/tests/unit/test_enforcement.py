@@ -66,6 +66,21 @@ class TestExtractJiraProjects:
         )
         assert result == frozenset(["PROJ", "DEMO"])
 
+    def test_jql_with_order_by_does_not_extract_keywords(self) -> None:
+        result = extract_jira_projects(
+            "jira_search",
+            {"jql": "project = DS ORDER BY created DESC"},
+        )
+        assert result == frozenset(["DS"])
+
+    def test_jql_order_by_keywords_not_treated_as_projects(self) -> None:
+        result = extract_jira_projects(
+            "jira_search",
+            {"jql": "project = DS ORDER BY updated ASC"},
+        )
+        for keyword in ("ORDER", "BY", "UPDATED", "ASC", "DESC"):
+            assert keyword not in result
+
     def test_empty_args_returns_empty(self) -> None:
         result = extract_jira_projects("jira_get_issue", {})
         assert result == frozenset()

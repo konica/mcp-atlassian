@@ -5,7 +5,8 @@ from mcp_proxy.config import ProxyConfig
 
 
 def test_default_config() -> None:
-    config = ProxyConfig()
+    # _env_file=None isolates the test from any local proxy/.env file
+    config = ProxyConfig(_env_file=None)
     assert config.upstream_url == "http://mcp-atlassian:9000"
     assert config.read_only is False
     assert config.jira_projects_set == frozenset()

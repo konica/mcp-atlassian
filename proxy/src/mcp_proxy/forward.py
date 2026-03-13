@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 _HOP_BY_HOP = frozenset(
     [
         "connection",
+        "host",  # rewritten by httpx from the upstream URL
         "keep-alive",
         "transfer-encoding",
         "te",

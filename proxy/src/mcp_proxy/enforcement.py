@@ -67,9 +67,15 @@ _CONFLUENCE_SPACE_KEY_ARGS: frozenset[str] = frozenset(["space_key", "space"])
 _ISSUE_KEY_RE = re.compile(r"^([A-Z][A-Z0-9_]+)-\d+$")
 
 # Regex: best-effort extraction of explicit project references in JQL.
-# Matches: project = PROJ, project in (PROJ, DEMO), project = "PROJ"
-_JQL_PROJECT_RE = re.compile(
-    r"\bproject\s*(?:=|in\s*\()\s*['\"]?([A-Z][A-Z0-9_,\s'\"]+)['\"]?",
+# Two patterns to avoid capturing JQL keywords that follow the project key:
+#   1. project = KEY  or  project = "KEY"  (single key, stops at word boundary)
+#   2. project in (KEY1, KEY2, ...)        (keys are bounded by the closing paren)
+_JQL_PROJECT_EQ_RE = re.compile(
+    r"\bproject\s*=\s*['\"]?([A-Z][A-Z0-9_]*)['\"]?",
+    re.IGNORECASE,
+)
+_JQL_PROJECT_IN_RE = re.compile(
+    r"\bproject\s+in\s*\(([^)]+)\)",
     re.IGNORECASE,
 )
 
@@ -133,13 +139,20 @@ def _extract_projects_from_jql(jql: str) -> frozenset[str]:
         Set of project key strings found in the query.
     """
     found: set[str] = set()
-    for match in _JQL_PROJECT_RE.finditer(jql):
-        raw = match.group(1)
-        # Split on commas/parens, strip quotes and whitespace
-        for part in re.split(r"[,\s()\"']+", raw):
+
+    # project = KEY  (single key)
+    for match in _JQL_PROJECT_EQ_RE.finditer(jql):
+        clean = match.group(1).strip().upper()
+        if clean:
+            found.add(clean)
+
+    # project in (KEY1, KEY2, ...)
+    for match in _JQL_PROJECT_IN_RE.finditer(jql):
+        for part in re.split(r"[,\s\"']+", match.group(1)):
             clean = part.strip().upper()
             if clean and re.match(r"^[A-Z][A-Z0-9_]+$", clean):
                 found.add(clean)
+
     return frozenset(found)
 
 
