@@ -1,6 +1,6 @@
 # MCP Proxy/Gateway — Architecture
 
-> Covers: main request flow, read-only enforcement, filter configuration, and filter validation logic.
+> Covers: main request flow, filter configuration, and filter validation logic.
 > Implementation lives in `proxy/src/mcp_proxy/`.
 
 ---
@@ -84,77 +84,24 @@ proxy_all()  [main.py]
 | `initialize` | No | Session setup — pass-through |
 | `notifications/initialized` | No | Client acknowledgement — pass-through |
 | `tools/list` | No | Tool discovery — pass-through (server's `READ_ONLY_MODE` hides write tools from listing) |
-| `tools/call` | **Yes** | Full enforcement: read-only + whitelist checks |
+| `tools/call` | **Yes** | Whitelist enforcement (project/space) |
 | `ping` / others | No | Pass-through |
 
 ---
 
-## 3. Read-Only Enforcement
+## 3. Read-Only Mode
 
-### How it works
+Read-only enforcement is **delegated entirely to the upstream server** via `READ_ONLY_MODE=true` on mcp-atlassian. When enabled, the upstream:
 
-When `PROXY_READ_ONLY=true`, the proxy blocks any `tools/call` whose tool name is classified as a **write operation** — before the request reaches `mcp-atlassian`.
+- Removes write tools from `tools/list` so they never appear to clients
+- Blocks write tool calls at the handler level before any API call is made
 
-Classification happens in `is_write_tool()` (`enforcement.py`):
-
-```python
-_WRITE_TOOL_PATTERNS = frozenset([
-    "create", "update", "delete", "add",
-    "edit", "move", "upload", "transition",
-    "remove", "link", "reply",
-])
-
-_READ_ONLY_OVERRIDES = frozenset([
-    "jira_get_link_types",   # contains "link" but is a read operation
-])
-
-def is_write_tool(tool_name: str) -> bool:
-    if tool_name in _READ_ONLY_OVERRIDES:
-        return False                          # explicit override wins
-    parts = set(tool_name.lower().split("_"))
-    return bool(parts & _WRITE_TOOL_PATTERNS) # any segment matches a pattern
-```
-
-**Examples:**
-
-| Tool name | Write? | Reason |
-|---|---|---|
-| `jira_get_issue` | No | No write segment |
-| `jira_create_issue` | Yes | `"create"` segment |
-| `jira_add_comment` | Yes | `"add"` segment |
-| `jira_remove_watcher` | Yes | `"remove"` segment |
-| `jira_transition_issue` | Yes | `"transition"` segment |
-| `jira_get_link_types` | No | In `_READ_ONLY_OVERRIDES` |
-| `jira_link_to_epic` | Yes | `"link"` segment, not in overrides |
-| `confluence_delete_page` | Yes | `"delete"` segment |
-| `confluence_search` | No | No write segment |
-
-### Deny response
-
-When a write tool is blocked, the proxy returns a JSON-RPC error that MCP clients understand:
-
-```json
-HTTP 403 Forbidden
-{
-  "jsonrpc": "2.0",
-  "id": 42,
-  "error": {
-    "code": -32001,
-    "message": "Tool 'jira_create_issue' is a write operation; server is in read-only mode."
-  }
-}
-```
-
-### Defense-in-depth
-
-The proxy's `PROXY_READ_ONLY` is the **primary** enforcement layer. The upstream server's `READ_ONLY_MODE=true` acts as a **secondary** layer. Both should be enabled in production:
+The proxy does **not** duplicate this logic. Maintaining a parallel pattern list (`_WRITE_TOOL_PATTERNS`) in the proxy risks drift from the server's own classification as new tools are added.
 
 ```
-Proxy layer:   PROXY_READ_ONLY=true      → blocks at network, before mcp-atlassian
-Server layer:  READ_ONLY_MODE=true       → hides write tools from tools/list + blocks at handler
+To enable read-only mode, set on mcp-atlassian (not on the proxy):
+  READ_ONLY_MODE=true
 ```
-
-If only the proxy enforces read-only, write tools still appear in `tools/list` responses — confusing to users but still safely blocked.
 
 ---
 
@@ -166,10 +113,9 @@ Filters are configured entirely via environment variables, parsed by `ProxyConfi
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `PROXY_UPSTREAM_URL` | string | `http://mcp-atlassian:8080` | Base URL of the upstream server |
+| `PROXY_UPSTREAM_URL` | string | `http://mcp-atlassian:9000` | Base URL of the upstream server |
 | `PROXY_LISTEN_HOST` | string | `0.0.0.0` | Interface to bind |
 | `PROXY_LISTEN_PORT` | int | `8000` | Port to listen on |
-| `PROXY_READ_ONLY` | bool | `false` | Block all write tools |
 | `PROXY_JIRA_PROJECTS_WHITELIST` | string | `""` | Comma-separated Jira project keys |
 | `PROXY_CONFLUENCE_SPACES_WHITELIST` | string | `""` | Comma-separated Confluence space keys |
 | `PROXY_AUDIT_LOG_ENABLED` | bool | `true` | Emit structured JSON audit logs |
@@ -212,7 +158,7 @@ Keys are normalised to **uppercase** — `PROXY_JIRA_PROJECTS_WHITELIST=proj,Dem
 
 ## 5. Filter Validation Logic
 
-Filter validation runs inside `check_access()` (`enforcement.py`) as the second and third checks, after the read-only check. It only activates when a whitelist is non-empty.
+Filter validation runs inside `check_access()` (`enforcement.py`). It only activates when a whitelist is non-empty.
 
 ### Argument scanning — Jira
 
@@ -238,11 +184,17 @@ The proxy scans three categories of tool arguments to extract project keys:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**JQL extraction (best-effort regex):**
+**JQL extraction (best-effort regex — two patterns):**
 
 ```python
-_JQL_PROJECT_RE = re.compile(
-    r"\bproject\s*(?:=|in\s*\()\s*['\"]?([A-Z][A-Z0-9_,\s'\"]+)['\"]?",
+# project = KEY  (stops at word boundary, no trailing keyword capture)
+_JQL_PROJECT_EQ_RE = re.compile(
+    r"\bproject\s*=\s*['\"]?([A-Z][A-Z0-9_]*)['\"]?",
+    re.IGNORECASE,
+)
+# project in (KEY1, KEY2, ...)  (bounded by closing paren)
+_JQL_PROJECT_IN_RE = re.compile(
+    r"\bproject\s+in\s*\(([^)]+)\)",
     re.IGNORECASE,
 )
 ```
@@ -252,6 +204,7 @@ Matches:
 - `project = "PROJ"`
 - `project in (PROJ, DEMO)`
 - `project in ('PROJ', 'DEMO')`
+- `project = DS ORDER BY created DESC` → extracts only `DS` (keywords not captured)
 
 Does NOT catch:
 - Aliased project references (`issuetype in subtaskIssueTypes()`)
@@ -270,20 +223,16 @@ CQL (`cql`, `query` args) is not currently parsed for space references — a kno
 ### Decision table
 
 ```
-check_access(tool_name, arguments, read_only, jira_whitelist, confluence_whitelist)
+check_access(tool_name, arguments, jira_whitelist, confluence_whitelist)
 
-Step 1 — Read-only check
-  read_only=True AND is_write_tool(tool_name)?
-    → DENY: "Tool '...' is a write operation; server is in read-only mode."
-
-Step 2 — Jira whitelist check
+Step 1 — Jira whitelist check
   tool starts with "jira_" AND jira_whitelist is non-empty?
     extracted = extract_jira_projects(tool_name, arguments)
     disallowed = extracted - jira_whitelist
     disallowed is non-empty?
       → DENY: "Tool '...' references Jira project(s) ['X'] not in whitelist ['Y']."
 
-Step 3 — Confluence whitelist check
+Step 2 — Confluence whitelist check
   tool starts with "confluence_" AND confluence_whitelist is non-empty?
     extracted = extract_confluence_spaces(tool_name, arguments)
     disallowed = extracted - confluence_whitelist
@@ -397,8 +346,8 @@ Jira / Confluence API  (each user's own instance)
 | `JIRA_PERSONAL_TOKEN` | **Each user** | `X-Atlassian-Jira-Personal-Token` request header |
 | `CONFLUENCE_URL` | **Each user** | `X-Atlassian-Confluence-Url` request header |
 | `CONFLUENCE_PERSONAL_TOKEN` | **Each user** | `X-Atlassian-Confluence-Personal-Token` request header |
-| `PROXY_READ_ONLY`, `PROXY_*_WHITELIST` | Ops / compose file | Env vars on `mcp-proxy` container — never sent to client |
-| `READ_ONLY_MODE` | Ops / compose file | Env var on `mcp-atlassian` container (second defence) |
+| `PROXY_*_WHITELIST` | Ops / compose file | Env vars on `mcp-proxy` container — never sent to client |
+| `READ_ONLY_MODE` | Ops / compose file | Env var on `mcp-atlassian` container — enforced at the server |
 
 **Consequence**: because each user provides their own Jira/Confluence URLs, the
 `mcp-atlassian` container does **not** need `JIRA_URL` or `CONFLUENCE_URL` env vars at all
