@@ -16,9 +16,19 @@ if [[ "${1:-}" == "--debug" ]]; then
   DEBUG_MODE=true
 fi
 
+# Load proxy/.env if present (overrides defaults; shell env vars take precedence)
+ENV_FILE="$PROXY_DIR/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  echo "Loading $ENV_FILE"
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
 export PROXY_UPSTREAM_URL="${PROXY_UPSTREAM_URL:-http://127.0.0.1:8080}"
-export PROXY_READ_ONLY="${PROXY_READ_ONLY:-true}"
-export PROXY_JIRA_PROJECTS_WHITELIST="${PROXY_JIRA_PROJECTS_WHITELIST:-DS}"
+export PROXY_READ_ONLY="${PROXY_READ_ONLY:-false}"
+export PROXY_JIRA_PROJECTS_WHITELIST="${PROXY_JIRA_PROJECTS_WHITELIST:-}"
 export PROXY_CONFLUENCE_SPACES_WHITELIST="${PROXY_CONFLUENCE_SPACES_WHITELIST:-}"
 export PROXY_AUDIT_LOG_ENABLED="${PROXY_AUDIT_LOG_ENABLED:-true}"
 
