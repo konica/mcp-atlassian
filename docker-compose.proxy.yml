@@ -1,0 +1,71 @@
+# docker-compose.proxy.yml
+# Usage: docker compose -f docker-compose.proxy.yml up
+#
+# Exposes the proxy on host port 8080.
+# mcp-atlassian is internal-only (no published ports).
+#
+# Atlassian credentials are NOT configured server-side. Each user passes
+# their own credentials per-request via four X-Atlassian-* headers:
+#   X-Atlassian-Jira-Url, X-Atlassian-Jira-Personal-Token,
+#   X-Atlassian-Confluence-Url, X-Atlassian-Confluence-Personal-Token
+#
+# Environment variables expected in a .env file:
+#   PROXY_JIRA_PROJECTS_WHITELIST=PROJ,DEMO
+#   PROXY_CONFLUENCE_SPACES_WHITELIST=ENG,HR
+#   PROXY_READ_ONLY=false
+
+services:
+  mcp-atlassian:
+    image: ka-mcp-atlassian:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - "--transport"
+      - "streamable-http"
+      - "--port"
+      - "9000"
+      - "--host"
+      - "0.0.0.0"
+      - "--path"
+      - "/mcp"
+    environment:
+      READ_ONLY_MODE: ${READ_ONLY_MODE:-false}
+    # IMPORTANT: no 'ports' key — this service is internal only.
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  mcp-proxy:
+    image: ka-mcp-proxy:latest
+    build:
+      context: proxy/
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PROXY_UPSTREAM_URL: http://mcp-atlassian:9000
+      PROXY_LISTEN_PORT: "8080"
+      PROXY_READ_ONLY: ${PROXY_READ_ONLY:-false}
+      PROXY_JIRA_PROJECTS_WHITELIST: ${PROXY_JIRA_PROJECTS_WHITELIST:-}
+      PROXY_CONFLUENCE_SPACES_WHITELIST: ${PROXY_CONFLUENCE_SPACES_WHITELIST:-}
+      PROXY_AUDIT_LOG_ENABLED: "true"
+    depends_on:
+      mcp-atlassian:
+        condition: service_healthy
+    networks:
+      - mcp-internal
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+networks:
+  mcp-internal:
+    driver: bridge
+    internal: false  # set to true in production if proxy is behind an LB
