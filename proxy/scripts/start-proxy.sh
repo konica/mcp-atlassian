@@ -27,7 +27,6 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 export PROXY_UPSTREAM_URL="${PROXY_UPSTREAM_URL:-http://127.0.0.1:8080}"
-export PROXY_READ_ONLY="${PROXY_READ_ONLY:-false}"
 export PROXY_JIRA_PROJECTS_WHITELIST="${PROXY_JIRA_PROJECTS_WHITELIST:-}"
 export PROXY_CONFLUENCE_SPACES_WHITELIST="${PROXY_CONFLUENCE_SPACES_WHITELIST:-}"
 export PROXY_AUDIT_LOG_ENABLED="${PROXY_AUDIT_LOG_ENABLED:-true}"
@@ -41,7 +40,6 @@ fi
 echo "Starting mcp-proxy..."
 echo "  Upstream : $PROXY_UPSTREAM_URL"
 echo "  Port     : 8000"
-echo "  Read-only: $PROXY_READ_ONLY"
 echo "  Jira WL  : ${PROXY_JIRA_PROJECTS_WHITELIST:-<all>}"
 echo "  Conf WL  : ${PROXY_CONFLUENCE_SPACES_WHITELIST:-<all>}"
 echo "  Debug    : $DEBUG_MODE"

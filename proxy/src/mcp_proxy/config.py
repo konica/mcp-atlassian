@@ -17,7 +17,6 @@ class ProxyConfig(BaseSettings):
         upstream_url: Full base URL of the upstream mcp-atlassian server.
         listen_host: Host to bind the proxy server to.
         listen_port: Port to bind the proxy server to.
-        read_only: If True, reject all write tool calls before forwarding.
         jira_projects_whitelist: Allowed Jira project keys. Empty set = allow all.
         confluence_spaces_whitelist: Allowed Confluence space keys. Empty set = allow all.
         audit_log_enabled: Whether to emit structured audit log entries.
@@ -25,12 +24,11 @@ class ProxyConfig(BaseSettings):
         upstream_read_timeout: httpx read timeout in seconds.
     """
 
-    model_config = SettingsConfigDict(env_prefix="PROXY_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="PROXY_", env_file=".env", extra="ignore")
 
     upstream_url: str = "http://mcp-atlassian:9000"
     listen_host: str = "0.0.0.0"  # noqa: S104
     listen_port: int = 8080
-    read_only: bool = False
     jira_projects_whitelist: str = ""   # comma-separated, e.g. "PROJ,DEMO"
     confluence_spaces_whitelist: str = ""  # comma-separated, e.g. "ENG,HR"
     audit_log_enabled: bool = True

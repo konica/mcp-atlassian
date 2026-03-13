@@ -6,39 +6,7 @@ from mcp_proxy.enforcement import (
     check_access,
     extract_confluence_spaces,
     extract_jira_projects,
-    is_write_tool,
 )
-
-
-class TestIsWriteTool:
-    """Tests for write-tool classification."""
-
-    def test_create_issue_is_write(self) -> None:
-        assert is_write_tool("jira_create_issue") is True
-
-    def test_get_issue_is_not_write(self) -> None:
-        assert is_write_tool("jira_get_issue") is False
-
-    def test_delete_page_is_write(self) -> None:
-        assert is_write_tool("confluence_delete_page") is True
-
-    def test_search_is_not_write(self) -> None:
-        assert is_write_tool("jira_search") is False
-
-    def test_add_comment_is_write(self) -> None:
-        assert is_write_tool("jira_add_comment") is True
-
-    def test_batch_create_is_write(self) -> None:
-        assert is_write_tool("jira_batch_create_issues") is True
-
-    def test_remove_is_write(self) -> None:
-        assert is_write_tool("jira_remove_issue_link") is True
-
-    def test_get_link_types_is_not_write(self) -> None:
-        assert is_write_tool("jira_get_link_types") is False
-
-    def test_link_to_epic_is_write(self) -> None:
-        assert is_write_tool("jira_link_to_epic") is True
 
 
 class TestExtractJiraProjects:
@@ -107,32 +75,10 @@ class TestExtractConfluenceSpaces:
 class TestCheckAccess:
     """Tests for the top-level access control check."""
 
-    def test_allows_read_in_read_only_mode(self) -> None:
-        result = check_access(
-            "jira_get_issue",
-            {"issue_key": "PROJ-1"},
-            read_only=True,
-            jira_whitelist=frozenset(["PROJ"]),
-            confluence_whitelist=frozenset(),
-        )
-        assert result.allowed is True
-
-    def test_blocks_write_in_read_only_mode(self) -> None:
-        result = check_access(
-            "jira_create_issue",
-            {"project_key": "PROJ"},
-            read_only=True,
-            jira_whitelist=frozenset(["PROJ"]),
-            confluence_whitelist=frozenset(),
-        )
-        assert result.allowed is False
-        assert "read-only" in result.reason
-
     def test_blocks_out_of_whitelist_project(self) -> None:
         result = check_access(
             "jira_get_issue",
             {"issue_key": "OTHER-1"},
-            read_only=False,
             jira_whitelist=frozenset(["PROJ"]),
             confluence_whitelist=frozenset(),
         )
@@ -143,7 +89,16 @@ class TestCheckAccess:
         result = check_access(
             "jira_get_issue",
             {"issue_key": "PROJ-1"},
-            read_only=False,
+            jira_whitelist=frozenset(["PROJ"]),
+            confluence_whitelist=frozenset(),
+        )
+        assert result.allowed is True
+
+    def test_write_tool_allowed_when_whitelisted(self) -> None:
+        """Write tools are not blocked by the proxy — upstream READ_ONLY_MODE handles that."""
+        result = check_access(
+            "jira_create_issue",
+            {"project_key": "PROJ"},
             jira_whitelist=frozenset(["PROJ"]),
             confluence_whitelist=frozenset(),
         )
@@ -153,7 +108,6 @@ class TestCheckAccess:
         result = check_access(
             "jira_get_issue",
             {"issue_key": "ANY-123"},
-            read_only=False,
             jira_whitelist=frozenset(),
             confluence_whitelist=frozenset(),
         )
@@ -163,7 +117,6 @@ class TestCheckAccess:
         result = check_access(
             "confluence_get_page",
             {"space_key": "HR"},
-            read_only=False,
             jira_whitelist=frozenset(),
             confluence_whitelist=frozenset(["ENG"]),
         )
@@ -178,7 +131,6 @@ class TestCheckAccess:
         result = check_access(
             "jira_get_user_profile",
             {"account_id": "abc123"},
-            read_only=False,
             jira_whitelist=frozenset(["PROJ"]),
             confluence_whitelist=frozenset(),
         )

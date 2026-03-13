@@ -1,8 +1,12 @@
 """Access control enforcement for MCP tool calls.
 
-Provides project/space whitelist enforcement and read-only mode blocking.
+Provides project/space whitelist enforcement.
 The proxy intercepts the JSON-RPC ``tools/call`` method body and applies
 these rules before forwarding to the upstream mcp-atlassian server.
+
+Read-only enforcement is delegated entirely to the upstream server via
+``READ_ONLY_MODE=true`` on mcp-atlassian, which removes write tools from
+``tools/list`` and blocks them at the handler level.
 """
 
 from __future__ import annotations
@@ -15,35 +19,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Tool classification
+# Project / space key extraction
 # ---------------------------------------------------------------------------
-
-# Tools whose names include these substrings are considered write operations.
-# This mirrors the ``write`` tag logic in mcp-atlassian's _list_tools_mcp.
-_WRITE_TOOL_PATTERNS: frozenset[str] = frozenset(
-    [
-        "create",
-        "update",
-        "delete",
-        "add",
-        "edit",
-        "move",
-        "upload",
-        "transition",
-        "remove",
-        "link",
-        "reply",
-    ]
-)
-
-# Read-only tools that contain write-pattern segments in their name.
-# These are explicitly excluded from write classification to avoid
-# false positives in read-only mode (e.g., "link" in "jira_get_link_types").
-_READ_ONLY_OVERRIDES: frozenset[str] = frozenset(
-    [
-        "jira_get_link_types",
-    ]
-)
 
 # Arguments that directly name a Jira project key.
 _JIRA_PROJECT_KEY_ARGS: frozenset[str] = frozenset(
@@ -55,9 +32,7 @@ _JIRA_ISSUE_KEY_ARGS: frozenset[str] = frozenset(
     ["issue_key", "issue_id", "source_issue_key", "target_issue_key", "parent_issue_key"]
 )
 
-# Arguments that may contain JQL; the project prefix inside the issue_key is
-# used for quick validation. Full JQL AST parsing is out of scope here but
-# a best-effort regex is applied.
+# Arguments that may contain JQL; project keys are extracted with best-effort regex.
 _JQL_ARGS: frozenset[str] = frozenset(["jql", "query"])
 
 # Arguments that contain Confluence space keys.
@@ -95,21 +70,6 @@ class EnforcementResult:
     reason: str
     tool_name: str
     extracted_projects: frozenset[str] = frozenset()
-
-
-def is_write_tool(tool_name: str) -> bool:
-    """Determine whether a tool name represents a write operation.
-
-    Args:
-        tool_name: The MCP tool name, e.g. ``jira_create_issue``.
-
-    Returns:
-        True if any write pattern appears as a word segment in the tool name.
-    """
-    if tool_name in _READ_ONLY_OVERRIDES:
-        return False
-    parts = set(tool_name.lower().split("_"))
-    return bool(parts & _WRITE_TOOL_PATTERNS)
 
 
 def _extract_project_from_issue_key(issue_key: str) -> str | None:
@@ -212,39 +172,34 @@ def check_access(
     tool_name: str,
     arguments: dict[str, Any],
     *,
-    read_only: bool,
     jira_whitelist: frozenset[str],
     confluence_whitelist: frozenset[str],
 ) -> EnforcementResult:
     """Evaluate whether a tool call should be allowed.
 
-    Applies three sequential checks:
-    1. Read-only mode: rejects any write tool.
-    2. Jira project whitelist: rejects calls referencing out-of-scope projects.
-    3. Confluence space whitelist: rejects calls referencing out-of-scope spaces.
+    Applies two sequential checks:
+    1. Jira project whitelist: rejects calls referencing out-of-scope projects.
+    2. Confluence space whitelist: rejects calls referencing out-of-scope spaces.
 
     A whitelist that is empty (``frozenset()``) means "allow all" for that
     dimension.
 
+    Read-only enforcement is intentionally omitted here — it is delegated to
+    the upstream mcp-atlassian server via ``READ_ONLY_MODE=true``, which
+    removes write tools from ``tools/list`` and blocks them at the handler
+    level. Duplicating that logic in the proxy would require maintaining a
+    parallel list of write-tool name patterns that can drift from the server.
+
     Args:
         tool_name: The MCP tool name.
         arguments: Parsed tool arguments from the JSON-RPC body.
-        read_only: Whether write tools should be blocked.
         jira_whitelist: Allowed Jira project keys; empty = allow all.
         confluence_whitelist: Allowed Confluence space keys; empty = allow all.
 
     Returns:
         EnforcementResult indicating allow or deny with reason.
     """
-    # --- Check 1: read-only mode ---
-    if read_only and is_write_tool(tool_name):
-        return EnforcementResult(
-            allowed=False,
-            reason=f"Tool '{tool_name}' is a write operation; server is in read-only mode.",
-            tool_name=tool_name,
-        )
-
-    # --- Check 2: Jira project whitelist ---
+    # --- Check 1: Jira project whitelist ---
     is_jira_tool = tool_name.startswith("jira_")
     if is_jira_tool and jira_whitelist:
         jira_projects = extract_jira_projects(tool_name, arguments)
@@ -262,7 +217,7 @@ def check_access(
                     extracted_projects=jira_projects,
                 )
 
-    # --- Check 3: Confluence space whitelist ---
+    # --- Check 2: Confluence space whitelist ---
     is_confluence_tool = tool_name.startswith("confluence_")
     if is_confluence_tool and confluence_whitelist:
         spaces = extract_confluence_spaces(tool_name, arguments)

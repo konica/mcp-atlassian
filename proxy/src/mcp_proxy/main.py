@@ -52,10 +52,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         app.state.http_client = client
         logger.info(
-            "MCP proxy started. Upstream: %s | read_only=%s | "
+            "MCP proxy started. Upstream: %s | "
             "jira_whitelist=%s | confluence_whitelist=%s",
             config.upstream_url,
-            config.read_only,
             sorted(config.jira_projects_set) or "all",
             sorted(config.confluence_spaces_set) or "all",
         )
@@ -232,7 +231,6 @@ async def proxy_all(request: Request, path: str) -> Response:
     result = check_access(
         tool_name,
         arguments,
-        read_only=config.read_only,
         jira_whitelist=config.jira_projects_set,
         confluence_whitelist=config.confluence_spaces_set,
     )
